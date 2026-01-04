@@ -1,462 +1,228 @@
-# dashboard_complete.py
 import streamlit as st
 import pandas as pd
-import numpy as np
 import plotly.express as px
 import plotly.graph_objects as go
-import matplotlib.pyplot as plt
-import seaborn as sns
-from datetime import datetime, timedelta
-import json
-import os
-from pathlib import Path
+from plotly.subplots import make_subplots
 
-# 设置页面配置（必须放在最前面）
+# --------------------------
+# 页面基础配置
+# --------------------------
 st.set_page_config(
-    page_title="魔鬼匹配数据分析看板",
+    page_title="魔鬼匹配数据统计看板",
     page_icon="🎮",
-    layout="wide",  # 宽屏模式
-    initial_sidebar_state="expanded"  # 侧边栏默认展开
+    layout="wide",
+    initial_sidebar_state="collapsed"
 )
 
+# 自定义样式（优化视觉效果）
+st.markdown("""
+<style>
+    .metric-card {
+        background-color: #f0f2f6;
+        padding: 15px;
+        border-radius: 8px;
+        margin-bottom: 10px;
+    }
+    .title-text {
+        font-size: 24px;
+        font-weight: 600;
+        color: #2e4057;
+    }
+    .sub-title {
+        font-size: 18px;
+        font-weight: 500;
+        color: #4a6fa5;
+        margin-top: 20px;
+        margin-bottom: 10px;
+    }
+</style>
+""", unsafe_allow_html=True)
 
-# ======================
-# 1. 数据加载函数
-# ======================
-@st.cache_data(ttl=3600)  # 缓存1小时
-def load_data():
-    """加载清洗后的数据"""
-    try:
-        # 自动查找最新数据文件
-        data_dir = Path("./data")
-        excel_files = list(data_dir.glob("dayresult*.xlsx"))
+# --------------------------
+# 数据初始化（模拟当日数据）
+# --------------------------
+date = "01月02日"
+data = {
+    # 核心指标
+    "总参与人数": 5783,
+    "总对局数": 1883,
+    "真人对局数": 1518,
+    "人机对局数": 365,
+    "翻盘局数": 355,
+    "翻盘局占比": 23.39,
+    "平均对局时长(秒)": 752.9,
+    "战力差平均值": 31.18,
+    "战力差中位数": 28.80,
+    "战力差最大值": 459.93,
+    "战力差超100局数": 27,
+    
+    # 新人等级分布
+    "一级新人": 604,
+    "二级新人": 583,
+    "三级新人": 1821,
+    "四级新人": 2601,
+    "非新人": 174,
+    
+    # 各局参与人数&胜率
+    "局数": [1, 2, 3, 4, 5, 6],
+    "参与人数": [2831, 2677, 2415, 2671, 2405, 2080],
+    "总体胜率": [52.56, 55.47, 60.50, 55.30, 62.54, 73.12],
+    
+    # 玩家参与场次分布
+    "参与场次": [1, 2, 3, 4, 5, 6],
+    "玩家数": [458, 650, 3907, 468, 169, 131]
+}
 
-        if not excel_files:
-            st.warning("未找到数据文件，请先运行数据处理脚本")
-            return pd.DataFrame()
+# 转换为DataFrame方便可视化
+df_round = pd.DataFrame({
+    "局数": data["局数"],
+    "参与人数": data["参与人数"],
+    "总体胜率": data["总体胜率"]
+})
 
-        # 加载最新的文件
-        latest_file = max(excel_files, key=os.path.getctime)
-        df = pd.read_excel(latest_file)
+df_play_times = pd.DataFrame({
+    "参与场次": data["参与场次"],
+    "玩家数": data["玩家数"]
+})
 
-        # 数据类型转换
-        if '结束时间' in df.columns:
-            df['结束时间'] = pd.to_datetime(df['结束时间'])
-            df['日期'] = df['结束时间'].dt.date
-            df['小时'] = df['结束时间'].dt.hour
+df_newbie = pd.DataFrame({
+    "新人等级": ["一级新人", "二级新人", "三级新人", "四级新人", "非新人"],
+    "人数": [data["一级新人"], data["二级新人"], data["三级新人"], 
+            data["四级新人"], data["非新人"]]
+})
 
-        return df
-    except Exception as e:
-        st.error(f"数据加载失败: {e}")
-        return pd.DataFrame()
+# --------------------------
+# 页面主体布局
+# --------------------------
+# 标题栏
+st.markdown(f"<div class='title-text'>{date} 魔鬼匹配数据统计报告</div>", unsafe_allow_html=True)
+st.divider()
 
-
-# ======================
-# 2. 侧边栏配置
-# ======================
-with st.sidebar:
-    st.title("⚙️ 控制面板")
-
-    # 日期选择器
-    st.subheader("📅 日期筛选")
-    if 'df' in locals():
-        min_date = df['日期'].min() if not df.empty else datetime.now().date()
-        max_date = df['日期'].max() if not df.empty else datetime.now().date()
-
-        selected_date = st.date_input(
-            "选择日期",
-            value=max_date,
-            min_value=min_date,
-            max_value=max_date
-        )
-    else:
-        selected_date = st.date_input("选择日期", value=datetime.now().date())
-
-    # 数据刷新
-    st.subheader("🔄 数据管理")
-    if st.button("刷新数据", type="primary"):
-        st.cache_data.clear()
-        st.rerun()
-
-    # 文件上传
-    uploaded_file = st.file_uploader("上传新数据文件", type=['xlsx', 'csv'])
-    if uploaded_file is not None:
-        try:
-            if uploaded_file.name.endswith('.xlsx'):
-                df = pd.read_excel(uploaded_file)
-            else:
-                df = pd.read_csv(uploaded_file)
-
-            # 保存文件
-            save_path = Path("./data") / f"uploaded_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
-            save_path.parent.mkdir(exist_ok=True)
-            df.to_excel(save_path, index=False)
-            st.success("文件上传成功！")
-            st.cache_data.clear()
-        except Exception as e:
-            st.error(f"文件上传失败: {e}")
-
-    # 看板主题设置
-    st.subheader("🎨 显示设置")
-    theme = st.selectbox("选择图表主题", ["plotly", "plotly_white", "plotly_dark"])
-
-    st.divider()
-    st.caption(f"最后更新: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-
-# ======================
-# 3. 主页面布局
-# ======================
-# 页面标题
-st.title("🎮 魔鬼匹配数据监控看板")
-st.markdown("---")
-
-# 加载数据
-df = load_data()
-
-if df.empty:
-    st.error("⚠️ 没有可用的数据，请先运行数据处理流程或上传数据文件")
-    st.stop()
-
-# ======================
-# 4. 关键指标卡片
-# ======================
-st.header("📊 核心指标概览")
-
-# 创建指标卡片
-col1, col2, col3, col4, col5 = st.columns(5)
-
+# 第一行：核心指标卡片（4列）
+col1, col2, col3, col4 = st.columns(4)
 with col1:
-    total_players = df['玩家id'].nunique()
-    st.metric(
-        label="总参与人数",
-        value=f"{total_players:,}",
-        delta="+5%" if total_players > 5000 else None
-    )
+    st.markdown("<div class='metric-card'>", unsafe_allow_html=True)
+    st.metric("总参与人数", f"{data['总参与人数']} 人")
+    st.metric("总对局数", f"{data['总对局数']} 局")
+    st.markdown("</div>", unsafe_allow_html=True)
 
 with col2:
-    total_matches = df['对局id'].nunique()
-    st.metric(
-        label="对局总数",
-        value=f"{total_matches:,}",
-        delta=f"{(total_matches / 6):.0f}局/场"
-    )
+    st.markdown("<div class='metric-card'>", unsafe_allow_html=True)
+    st.metric("真人对局数", f"{data['真人对局数']} 局")
+    st.metric("人机对局数", f"{data['人机对局数']} 局")
+    st.markdown("</div>", unsafe_allow_html=True)
 
 with col3:
-    avg_time = df['对局时间'].mean()
-    st.metric(
-        label="平均对局时间",
-        value=f"{avg_time:.1f}秒",
-        delta=f"{(avg_time - 720):.1f}秒" if avg_time > 720 else None
-    )
+    st.markdown("<div class='metric-card'>", unsafe_allow_html=True)
+    st.metric("翻盘局数", f"{data['翻盘局数']} 局")
+    st.metric("翻盘局占比", f"{data['翻盘局占比']}%")
+    st.markdown("</div>", unsafe_allow_html=True)
 
 with col4:
-    win_rate = (df['是否获胜'].sum() / len(df) * 100)
-    st.metric(
-        label="总体胜率",
-        value=f"{win_rate:.1f}%",
-        delta="平衡" if 48 <= win_rate <= 52 else "偏高" if win_rate > 52 else "偏低"
-    )
+    st.markdown("<div class='metric-card'>", unsafe_allow_html=True)
+    st.metric("平均对局时长", f"{data['平均对局时长(秒)']:.1f} 秒")
+    st.metric("战力差超100局数", f"{data['战力差超100局数']} 局")
+    st.markdown("</div>", unsafe_allow_html=True)
+
+# 第二行：战力差统计 + 新人等级分布
+col5, col6 = st.columns(2)
 
 with col5:
-    comeback_matches = len(df[df['是否翻盘'] == 1]['对局id'].unique())
-    comeback_rate = (comeback_matches / total_matches * 100) if total_matches > 0 else 0
-    st.metric(
-        label="翻盘局数",
-        value=f"{comeback_matches}局",
-        delta=f"{comeback_rate:.1f}%"
+    st.markdown("<div class='sub-title'>战力差统计</div>", unsafe_allow_html=True)
+    # 战力差指标+柱状图
+    fig_power = go.Figure()
+    fig_power.add_trace(go.Bar(
+        x=["平均值", "中位数", "最大值"],
+        y=[data["战力差平均值"], data["战力差中位数"], data["战力差最大值"]],
+        marker_color=["#3274A1", "#E1812C", "#C03D3E"]
+    ))
+    fig_power.update_layout(
+        height=300,
+        yaxis_title="战力差值",
+        xaxis_title="统计维度",
+        showlegend=False
     )
+    st.plotly_chart(fig_power, use_container_width=True)
 
-st.markdown("---")
-
-# ======================
-# 5. 图表展示区域
-# ======================
-tab1, tab2, tab3, tab4 = st.tabs(["📈 趋势分析", "👥 玩家分析", "⚔️ 对局分析", "📋 详细数据"])
-
-with tab1:
-    # 趋势分析标签页
-    col1, col2 = st.columns(2)
-
-    with col1:
-        st.subheader("每小时对局数量")
-        hourly_matches = df.groupby('小时')['对局id'].nunique().reset_index()
-        fig1 = px.line(
-            hourly_matches,
-            x='小时',
-            y='对局id',
-            markers=True,
-            title="对局时间分布",
-            template=theme
-        )
-        fig1.update_layout(height=400)
-        st.plotly_chart(fig1, use_container_width=True)
-
-    with col2:
-        st.subheader("每日参与人数趋势")
-        daily_players = df.groupby('日期')['玩家id'].nunique().reset_index()
-        fig2 = px.bar(
-            daily_players,
-            x='日期',
-            y='玩家id',
-            title="日活跃玩家数",
-            template=theme
-        )
-        fig2.update_layout(height=400)
-        st.plotly_chart(fig2, use_container_width=True)
-
-    # 胜率趋势
-    st.subheader("胜率变化趋势")
-    df_sorted = df.sort_values('结束时间')
-    df_sorted['累计对局'] = range(1, len(df_sorted) + 1)
-    df_sorted['累计胜率'] = df_sorted['是否获胜'].expanding().mean() * 100
-
-    fig3 = px.line(
-        df_sorted,
-        x='累计对局',
-        y='累计胜率',
-        title="累计胜率变化曲线",
-        template=theme
+with col6:
+    st.markdown("<div class='sub-title'>新人等级分布</div>", unsafe_allow_html=True)
+    fig_newbie = px.pie(
+        df_newbie,
+        values="人数",
+        names="新人等级",
+        hole=0.3,
+        color_discrete_sequence=px.colors.sequential.RdBu
     )
-    fig3.add_hline(y=50, line_dash="dash", line_color="red",
-                   annotation_text="50%平衡线",
-                   annotation_position="bottom right")
-    st.plotly_chart(fig3, use_container_width=True)
+    fig_newbie.update_layout(height=300)
+    st.plotly_chart(fig_newbie, use_container_width=True)
 
-with tab2:
-    # 玩家分析标签页
-    col1, col2 = st.columns([2, 1])
+# 第三行：各局参与人数&胜率 + 玩家参与场次分布
+col7, col8 = st.columns(2)
 
-    with col1:
-        st.subheader("玩家段位分布")
-        if '段位' in df.columns:
-            rank_dist = df[['玩家id', '段位']].drop_duplicates()['段位'].value_counts().reset_index()
-            rank_dist.columns = ['段位', '人数']
-
-            fig4 = px.bar(
-                rank_dist,
-                x='段位',
-                y='人数',
-                color='段位',
-                title="玩家段位分布",
-                template=theme
-            )
-            fig4.update_layout(height=500, showlegend=False)
-            st.plotly_chart(fig4, use_container_width=True)
-
-    with col2:
-        st.subheader("新人类型分布")
-        if '新人类型' in df.columns:
-            newcomer_dist = df[['玩家id', '新人类型']].drop_duplicates()['新人类型'].value_counts()
-
-            fig5 = px.pie(
-                values=newcomer_dist.values,
-                names=newcomer_dist.index,
-                title="新人类型占比",
-                template=theme,
-                hole=0.3
-            )
-            fig5.update_layout(height=400)
-            st.plotly_chart(fig5, use_container_width=True)
-
-    # KDA分布
-    st.subheader("KDA分布热图")
-    col1, col2, col3 = st.columns(3)
-
-    with col1:
-        kda_bins = st.slider("KDA分段数", 5, 20, 10)
-
-    with col2:
-        min_kda = st.number_input("最小KDA", 0.0, 10.0, 0.0)
-
-    with col3:
-        max_kda = st.number_input("最大KDA", 0.0, 20.0, 10.0)
-
-    if 'KDA' in df.columns:
-        filtered_df = df[(df['KDA'] >= min_kda) & (df['KDA'] <= max_kda)].copy()
-
-        # 创建热图数据
-        filtered_df['KDA_bin'] = pd.cut(filter_df['KDA'], bins=kda_bins)
-        heatmap_data = pd.crosstab(
-            filtered_df['段位'] if '段位' in filtered_df.columns else filtered_df['新人类型'],
-            filtered_df['KDA_bin']
-        )
-
-        fig6 = px.imshow(
-            heatmap_data,
-            title="KDA vs 段位热力图",
-            color_continuous_scale="Viridis",
-            aspect="auto"
-        )
-        st.plotly_chart(fig6, use_container_width=True)
-
-with tab3:
-    # 对局分析标签页
-    col1, col2 = st.columns(2)
-
-    with col1:
-        st.subheader("对局时长分布")
-        fig7 = px.histogram(
-            df,
-            x='对局时间',
-            nbins=30,
-            title="对局时长分布直方图",
-            template=theme
-        )
-        fig7.add_vline(x=df['对局时间'].mean(), line_dash="dash",
-                       line_color="red", annotation_text=f"平均{df['对局时间'].mean():.1f}秒")
-        st.plotly_chart(fig7, use_container_width=True)
-
-    with col2:
-        st.subheader("战力差 vs 胜率")
-        if '双方队伍战力差' in df.columns:
-            # 计算不同战力差区间的胜率
-            df['战力差区间'] = pd.cut(df['双方队伍战力差'], bins=10)
-            win_rate_by_diff = df.groupby('战力差区间')['是否获胜'].mean().reset_index()
-            win_rate_by_diff['战力差区间'] = win_rate_by_diff['战力差区间'].astype(str)
-
-            fig8 = px.bar(
-                win_rate_by_diff,
-                x='战力差区间',
-                y='是否获胜',
-                title="不同战力差下的胜率",
-                template=theme
-            )
-            fig8.update_layout(xaxis_title="战力差区间", yaxis_title="胜率")
-            st.plotly_chart(fig8, use_container_width=True)
-
-    # 翻盘局分析
-    st.subheader("翻盘局特征分析")
-    comeback_df = df[df['是否翻盘'] == 1]
-    normal_df = df[df['是否翻盘'] == 0]
-
-    if not comeback_df.empty:
-        col1, col2, col3 = st.columns(3)
-
-        with col1:
-            # 翻盘局平均等级差
-            if '己方5分钟平均等级' in df.columns and '敌方5分钟平均等级' in df.columns:
-                comeback_df['5分钟等级差'] = comeback_df['敌方5分钟平均等级'] - comeback_df['己方5分钟平均等级']
-                avg_diff = comeback_df['5分钟等级差'].mean()
-                st.metric("翻盘局平均5分钟等级差", f"{avg_diff:.2f}级")
-
-        with col2:
-            # 翻盘局平均战力差
-            if '双方队伍战力差' in df.columns:
-                avg_power_diff = comeback_df['双方队伍战力差'].mean()
-                st.metric("翻盘局平均战力差", f"{avg_power_diff:.2f}")
-
-        with col3:
-            # 翻盘局时长
-            avg_time_comeback = comeback_df['对局时间'].mean()
-            avg_time_normal = normal_df['对局时间'].mean()
-            st.metric("翻盘局平均时长", f"{avg_time_comeback:.1f}秒",
-                      delta=f"{(avg_time_comeback - avg_time_normal):.1f}秒")
-
-with tab4:
-    # 详细数据标签页
-    st.subheader("原始数据表格")
-
-    # 数据筛选器
-    with st.expander("🔍 数据筛选", expanded=False):
-        col1, col2, col3 = st.columns(3)
-
-        with col1:
-            selected_ranks = st.multiselect(
-                "选择段位",
-                options=df['段位'].unique() if '段位' in df.columns else [],
-                default=[]
-            )
-
-        with col2:
-            min_kda_filter = st.number_input("最小KDA", 0.0, 20.0, 0.0, key="kda_min_filter")
-            max_kda_filter = st.number_input("最大KDA", 0.0, 20.0, 10.0, key="kda_max_filter")
-
-        with col3:
-            win_filter = st.selectbox(
-                "是否获胜",
-                options=["全部", "是", "否"],
-                index=0
-            )
-
-    # 应用筛选
-    filtered_data = df.copy()
-
-    if selected_ranks and '段位' in filtered_data.columns:
-        filtered_data = filtered_data[filtered_data['段位'].isin(selected_ranks)]
-
-    if 'KDA' in filtered_data.columns:
-        filtered_data = filtered_data[
-            (filtered_data['KDA'] >= min_kda_filter) &
-            (filtered_data['KDA'] <= max_kda_filter)
-            ]
-
-    if win_filter == "是":
-        filtered_data = filtered_data[filtered_data['是否获胜'] == 1]
-    elif win_filter == "否":
-        filtered_data = filtered_data[filtered_data['是否获胜'] == 0]
-
-    # 显示数据
-    st.dataframe(
-        filtered_data,
-        use_container_width=True,
-        height=400,
-        column_config={
-            "玩家id": st.column_config.TextColumn(width="medium"),
-            "昵称": st.column_config.TextColumn(width="medium"),
-            "KDA": st.column_config.NumberColumn(format="%.2f"),
-            "对局时间": st.column_config.NumberColumn(format="%.1f")
-        }
+with col7:
+    st.markdown("<div class='sub-title'>各局参与人数&胜率</div>", unsafe_allow_html=True)
+    # 双Y轴图表：参与人数（柱状）+ 胜率（折线）
+    fig_round = make_subplots(specs=[[{"secondary_y": True}]])
+    # 参与人数柱状图
+    fig_round.add_trace(
+        go.Bar(x=df_round["局数"], y=df_round["参与人数"], name="参与人数", marker_color="#6C9EAF"),
+        secondary_y=False
     )
-
-    # 下载按钮
-    csv = filtered_data.to_csv(index=False).encode('utf-8-sig')
-    st.download_button(
-        label="📥 下载筛选数据 (CSV)",
-        data=csv,
-        file_name=f"魔鬼匹配_筛选数据_{datetime.now().strftime('%Y%m%d')}.csv",
-        mime="text/csv"
+    # 胜率折线图
+    fig_round.add_trace(
+        go.Line(x=df_round["局数"], y=df_round["总体胜率"], name="总体胜率(%)", marker_color="#E57C23"),
+        secondary_y=True
     )
+    # 配置轴标签
+    fig_round.update_layout(
+        height=300,
+        xaxis_title="局数",
+        yaxis_title="参与人数",
+        yaxis2_title="总体胜率(%)",
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
+    )
+    st.plotly_chart(fig_round, use_container_width=True)
 
-    # 数据摘要
-    st.subheader("数据摘要")
-    col1, col2 = st.columns(2)
+with col8:
+    st.markdown("<div class='sub-title'>玩家参与场次分布</div>", unsafe_allow_html=True)
+    fig_play = px.bar(
+        df_play_times,
+        x="参与场次",
+        y="玩家数",
+        color="玩家数",
+        color_continuous_scale="Blues",
+        text="玩家数"
+    )
+    fig_play.update_layout(
+        height=300,
+        xaxis_title="参与场次",
+        yaxis_title="玩家数",
+        coloraxis_showscale=False
+    )
+    fig_play.update_traces(textposition="outside")
+    st.plotly_chart(fig_play, use_container_width=True)
 
-    with col1:
-        st.json({
-            "数据行数": len(filtered_data),
-            "玩家数": filtered_data['玩家id'].nunique(),
-            "对局数": filtered_data['对局id'].nunique(),
-            "平均KDA": filtered_data['KDA'].mean() if 'KDA' in filtered_data.columns else "N/A"
+# 数据详情展开栏
+with st.expander("📋 完整数据详情", expanded=False):
+    col9, col10 = st.columns(2)
+    with col9:
+        st.subheader("基础数据")
+        base_data = pd.DataFrame({
+            "指标": ["总参与人数", "总对局数", "真人对局数", "人机对局数", "翻盘局数", "翻盘局占比",
+                    "平均对局时长(秒)", "战力差平均值", "战力差中位数", "战力差最大值", "战力差超100局数"],
+            "数值": [data["总参与人数"], data["总对局数"], data["真人对局数"], data["人机对局数"],
+                    data["翻盘局数"], f"{data['翻盘局占比']}%", data["平均对局时长(秒)"],
+                    data["战力差平均值"], data["战力差中位数"], data["战力差最大值"], data["战力差超100局数"]]
         })
-
-    with col2:
-        st.json({
-            "开始时间": filtered_data['结束时间'].min().strftime(
-                '%Y-%m-%d %H:%M') if not filtered_data.empty else "N/A",
-            "结束时间": filtered_data['结束时间'].max().strftime(
-                '%Y-%m-%d %H:%M') if not filtered_data.empty else "N/A",
-            "最长对局": filtered_data['对局时间'].max() if '对局时间' in filtered_data.columns else "N/A",
-            "最短对局": filtered_data['对局时间'].min() if '对局时间' in filtered_data.columns else "N/A"
-        })
-
-# ======================
-# 6. 底部信息
-# ======================
-st.markdown("---")
-col1, col2, col3 = st.columns(3)
-
-with col1:
-    st.caption("👤 玩家总数: " + str(df['玩家id'].nunique()))
-
-with col2:
-    st.caption("🎯 数据更新时间: " + datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
-
-with col3:
-    if st.button("🔄 手动刷新数据", type="secondary"):
-        st.cache_data.clear()
-        st.rerun()
-
-# ======================
-# 7. 运行说明
-# ======================
-# 在终端运行: streamlit run dashboard_complete.py
+        st.dataframe(base_data, use_container_width=True)
+    
+    with col10:
+        st.subheader("各局数据")
+        st.dataframe(df_round, use_container_width=True)
+    
+    st.subheader("新人等级&参与场次数据")
+    col11, col12 = st.columns(2)
+    with col11:
+        st.dataframe(df_newbie, use_container_width=True)
+    with col12:
+        st.dataframe(df_play_times, use_container_width=True)
